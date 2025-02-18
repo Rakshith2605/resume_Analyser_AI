@@ -1,0 +1,9 @@
+PyPDF2
+langchain-community
+#transformers
+langchain-huggingface
+langchain-openai
+scrapy
+crochet
+pyshorteners
+streamlit
