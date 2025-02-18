@@ -36,6 +36,12 @@ def experience_selector():
         placeholder="Select your experience level"
     )
 
+def date_posted():
+    return st.selectbox(
+        "Select Date Posted", 
+        options=("Any time","Past month","Past week","Past 24 hours")
+    )
+
 # Processing Functions
 def extract_resume(uploaded_file):        
     try:
@@ -55,6 +61,7 @@ def main():
         
         if uploaded_file:
             experience = experience_selector()
+            tym = date_posted()
             
             if experience and st.button("Analyse", type='primary'):
                 st.session_state.resume_text = extract_resume(uploaded_file)
