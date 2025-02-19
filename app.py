@@ -162,4 +162,6 @@ st.markdown(
 )
 
 if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 8501))
+    st.set_page_config(page_title="Resume Analyzer")
     main()
