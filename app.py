@@ -7,6 +7,7 @@ import pandas as pd
 import json
 import os
 
+st.set_page_config(page_title="Resume Analyzer")
 
 # Configuration and Setup
 def init_session_state():
@@ -165,5 +166,6 @@ st.markdown(
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8501))
-    st.set_page_config(page_title="Resume Analyzer")
+    #port = int(os.environ.get("PORT", 8501))
+    #st.set_page_config(page_title="Resume Analyzer")
     main()
