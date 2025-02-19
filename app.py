@@ -5,6 +5,8 @@ from src.llm.Analyse import analyze_resume
 from src.jobs.search import scrape_linkedin_jobs, create_linkedin_search_url
 import pandas as pd
 import json
+import os
+
 
 # Configuration and Setup
 def init_session_state():
