@@ -1,171 +1,125 @@
-import streamlit as st
-from io import StringIO
-from src.data.reader import upload_and_read_pdf
-from src.llm.Analyse import analyze_resume
-from src.jobs.search import scrape_linkedin_jobs, create_linkedin_search_url
-import pandas as pd
-import json
+from langchain_openai import ChatOpenAI
+from langchain.chains import LLMChain
+from langchain.prompts import PromptTemplate
+from typing import List, Optional
+import logging
+import ast
 import os
+from dotenv import load_dotenv
+from pathlib import Path
+from functools import lru_cache
 
-st.set_page_config(page_title="Resume Analyzer")
+# Configure logging once
+logging.basicConfig(level=logging.INFO)
+for logger_name in ("openai", "httpx", "httpcore"):
+    logging.getLogger(logger_name).setLevel(logging.WARNING)
 
-# Configuration and Setup
-def init_session_state():
-    if 'resume_text' not in st.session_state:
-        st.session_state.resume_text = None
-    if 'keywords' not in st.session_state:
-        st.session_state.keywords = []
-    if 'url' not in st.session_state:
-        st.session_state.url = None
-    if 'jobs_json' not in st.session_state:
-        st.session_state.jobs_json = None
-    if 'jobs_list' not in st.session_state:
-        st.session_state.jobs_list = []
-
-# Sidebar Components
-def render_sidebar():
-    st.write("### Resume Analyser :sunglasses:")
+@lru_cache(maxsize=1)
+def get_api_key() -> str:
+    """Cache and retrieve the API key to avoid redundant environment loading."""
+    # Get the root directory (where .env is located)
+    root_dir = Path(__file__).resolve().parent.parent.parent
+    dotenv_path = root_dir / '.env'
     
-    uploaded_file = st.file_uploader(
-        "Choose a PDF file",  # Fixed label to match file type
-        type='pdf', 
-        accept_multiple_files=False
-    )
+    # Load environment variables if not already done
+    load_dotenv(dotenv_path=dotenv_path)
     
-    if uploaded_file:
-        st.write("Resume: ", uploaded_file.name)
-        return uploaded_file
-    return None
-
-def experience_selector():
-    return st.selectbox(
-        "Experience Level",
-        options=[
-            "Internship",
-            "Entry level",
-            "Associate",
-            "Mid-Senior level",
-            "Director",
-            "Executive"
-        ],
-        index=None,
-        placeholder="Select your experience level"
-    )
-
-def date_posted():
-    return st.selectbox(
-        "Select Date Posted", 
-        options=("Any time", "Past month", "Past week", "Past 24 hours"),
-        index=None,
-        placeholder="Select your job post timeline"
-    )
-
-# Processing Functions
-def extract_resume(uploaded_file):        
-    try:
-        resume_text = upload_and_read_pdf(uploaded_file)
-        st.success("Resume text extracted successfully!")
-        return resume_text
-    except Exception as e:
-        st.error(f"Error processing PDF: {str(e)}")
-        return None
-
-def make_clickable(url, text):
-    return f'<a target="_blank" href="{url}">{text}</a>'
-
-# Main App
-def main():
-    init_session_state()
+    # Get API key
+    api_key = os.getenv('OPENAI_API_KEY')
+    if not api_key:
+        raise ValueError("OPENAI_API_KEY not found in environment variables")
     
-    with st.sidebar:
-        uploaded_file = render_sidebar()
-        
-        if uploaded_file:
-            experience = experience_selector()
-            tym_ln = date_posted()
-            
-            if experience and tym_ln and st.button("Analyse", type='primary'):
-                # Debugging: Print selected values
-                st.write(f"Selected Experience: {experience}")
-                st.write(f"Selected Time Range: {tym_ln}")
-                
-                # Extract resume text
-                st.session_state.resume_text = extract_resume(uploaded_file)
-                
-                if st.session_state.resume_text:
-                    # Analyze resume to extract keywords
-                    st.session_state.keywords = analyze_resume(st.session_state.resume_text)
-                    if not isinstance(st.session_state.keywords, list):
-                        st.session_state.keywords = []
-                    st.write(f"Extracted Keywords: {st.session_state.keywords}")
-                    
-                    # Generate LinkedIn search URL
-                    st.session_state.url = create_linkedin_search_url(experience, tym_ln, st.session_state.keywords)
-                    st.write(f"Generated URL: {st.session_state.url}")
-                    
-                    # Scrape jobs
-                    try:
-                        st.session_state.jobs_json = scrape_linkedin_jobs(st.session_state.url)
-                        st.session_state.jobs_list = json.loads(st.session_state.jobs_json)
-                    except json.JSONDecodeError as e:
-                        st.error(f"Error parsing jobs data: {e}")
-                        st.session_state.jobs_list = []
-    
-    # Main content area (can be expanded)
-    if st.session_state.resume_text:
-        #st.write("Resume Analysis Results:")
-        if st.session_state.jobs_list and isinstance(st.session_state.jobs_list, list):
-            df = pd.DataFrame(st.session_state.jobs_list)
-            df['link'] = df['link'].apply(lambda x: make_clickable(x, "View Job"))
-            html_table = df.to_html(escape=False, index=False)
-            st.write("### Resume Analysis Results")
-            st.markdown(html_table, unsafe_allow_html=True)
-        else:
-            st.warning("No jobs data available or invalid format.")
+    return api_key
 
-
-
-
-st.markdown(
+@lru_cache(maxsize=1)
+def get_resume_analyzer() -> LLMChain:
     """
-    <style>
-    table {
-        width: 100%;
-        border-collapse: collapse;
-        margin: 1em 0;
-        font-size: 1em;
-        font-family: sans-serif;
-        box-shadow: 0 0 20px rgba(0, 0, 0, 0.15);
-    }
-    th, td {
-        padding: 12px 15px;
-        text-align: left;
-        border-bottom: 1px solid #ddd;
-    }
-    th {
-        background-color: #009879;
-        color: white;
-        text-transform: uppercase;
-    }
-    tr:hover {
-        box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2); /* Shadow hover effect */
-        transform: translateY(-2px);
-        transition: all 0.3s ease;
-    }
-    a {
-        color: #009879;
-        text-decoration: none;
-    }
-    a:hover {
-        text-decoration: underline;
-    }
-    </style>
-    """,
-    unsafe_allow_html = True
-)
+    Creates and caches an LLMChain for resume analysis.
+    Using lru_cache to avoid recreating the chain for each analysis.
+    """
+    # Initialize ChatOpenAI
+    llm = ChatOpenAI(
+        temperature=0.3,
+        model_name="gpt-3.5-turbo",
+        api_key=get_api_key()
+    )
+    
+    # Define the prompt template - optimized wording
+    resume_prompt = PromptTemplate(
+        input_variables=["resume_text"],
+        template="""
+        Analyze the technical skills in the resume below. 
+        Return ONLY a list of the top 10-12 most prominent and relevant technical skills.
+        Format strictly as a Python list of snake_case strings: ["skill_1", "skill_2", ..., "skill_12"]
+        Example: Return "python_programming" not "Python Programming"
+        
+        Resume: {resume_text}
+        """
+    )
+    
+    # Create and return the LLMChain
+    return LLMChain(llm=llm, prompt=resume_prompt)
 
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 8501))
-    #port = int(os.environ.get("PORT", 8501))
-    #st.set_page_config(page_title="Resume Analyzer")
-    main()
+def parse_skills_list(response: str) -> List[str]:
+    """
+    Safely parses the LLM response into a list of skills.
+    Handles various response formats gracefully.
+    """
+    # Clean the response string
+    cleaned = response.strip()
+    
+    try:
+        # First attempt: direct parsing with ast.literal_eval
+        return ast.literal_eval(cleaned)
+    except (ValueError, SyntaxError):
+        # Second attempt: try to extract list from text if wrapped in other content
+        try:
+            # Find list-like patterns [...]
+            start = cleaned.find('[')
+            end = cleaned.rfind(']')
+            
+            if start >= 0 and end > start:
+                list_str = cleaned[start:end+1]
+                return ast.literal_eval(list_str)
+            
+            # If no list found, split by commas if contains commas
+            if ',' in cleaned:
+                items = [item.strip().strip('"\'') for item in cleaned.split(',')]
+                return [item for item in items if item]
+                
+            return []
+        except Exception:
+            # Last resort: return any non-empty words as individual items
+            import re
+            return re.findall(r'\b\w+\b', cleaned)
+
+def analyze_resume(resume_text: str) -> List[str]:
+    """
+    Analyzes the resume text and returns a list of extracted keywords.
+    Optimized for performance and error handling.
+    """
+    if not resume_text or not resume_text.strip():
+        logging.warning("Empty resume text provided")
+        return []
+    
+    try:
+        # Get the cached resume analyzer chain
+        chain = get_resume_analyzer()
+        
+        # Run the chain with the resume text
+        response = chain.run(resume_text=resume_text)
+        
+        # Parse the response to extract keywords
+        keywords = parse_skills_list(response)
+        
+        # Ensure we got a list back
+        if not isinstance(keywords, list):
+            logging.warning(f"Expected list, got {type(keywords)}")
+            return []
+            
+        # Remove any empty items and ensure all are strings
+        return [str(kw).strip() for kw in keywords if kw]
+        
+    except Exception as e:
+        logging.error(f"Error analyzing resume: {str(e)}")
+        return []
