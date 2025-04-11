@@ -1,104 +1,171 @@
-from langchain_openai import ChatOpenAI
-from langchain.chains import LLMChain
-from langchain.prompts import PromptTemplate
-from typing import List, Tuple
-import logging
-import ast
+import streamlit as st
+from io import StringIO
+from src.data.reader import upload_and_read_pdf
+from src.llm.Analyse import analyze_resume
+from src.jobs.search import scrape_linkedin_jobs, create_linkedin_search_url
+import pandas as pd
+import json
 import os
-from dotenv import load_dotenv
-from pathlib import Path
 
-# Get the root directory (where .env is located)
-root_dir = Path(__file__).resolve().parent.parent.parent
-dotenv_path = root_dir / '.env'
+st.set_page_config(page_title="Resume Analyzer")
 
-# Load the environment variables
-load_dotenv(dotenv_path=dotenv_path)
+# Configuration and Setup
+def init_session_state():
+    if 'resume_text' not in st.session_state:
+        st.session_state.resume_text = None
+    if 'keywords' not in st.session_state:
+        st.session_state.keywords = []
+    if 'url' not in st.session_state:
+        st.session_state.url = None
+    if 'jobs_json' not in st.session_state:
+        st.session_state.jobs_json = None
+    if 'jobs_list' not in st.session_state:
+        st.session_state.jobs_list = []
 
-# Access your environment variables
-api_key = os.getenv('OPENAI_API_KEY')
+# Sidebar Components
+def render_sidebar():
+    st.write("### Resume Analyser :sunglasses:")
+    
+    uploaded_file = st.file_uploader(
+        "Choose a PDF file",  # Fixed label to match file type
+        type='pdf', 
+        accept_multiple_files=False
+    )
+    
+    if uploaded_file:
+        st.write("Resume: ", uploaded_file.name)
+        return uploaded_file
+    return None
 
+def experience_selector():
+    return st.selectbox(
+        "Experience Level",
+        options=[
+            "Internship",
+            "Entry level",
+            "Associate",
+            "Mid-Senior level",
+            "Director",
+            "Executive"
+        ],
+        index=None,
+        placeholder="Select your experience level"
+    )
 
-# Suppress unnecessary logs
-logging.getLogger("openai").setLevel(logging.WARNING)
-logging.getLogger("httpx").setLevel(logging.WARNING)
-logging.getLogger("httpcore").setLevel(logging.WARNING)
+def date_posted():
+    return st.selectbox(
+        "Select Date Posted", 
+        options=("Any time", "Past month", "Past week", "Past 24 hours"),
+        index=None,
+        placeholder="Select your job post timeline"
+    )
 
-
-def create_resume_analyzer() -> LLMChain:
-    """
-    Creates and returns an LLMChain for resume analysis.
-    This function does not require `resume_text` as an argument.
-    """
+# Processing Functions
+def extract_resume(uploaded_file):        
     try:
-        # Initialize ChatOpenAI
-        llm = ChatOpenAI(
-            temperature=0.3,
-            model_name="gpt-3.5-turbo",
-            api_key=api_key
-        )
-
-        # Define the prompt template
-        resume_prompt = PromptTemplate(
-            input_variables=["resume_text"],
-            template="""
-            Act as ATS model and Extract technical skills from {resume_text}
-            Analyse the {resume_text} and rank the strictly only top 10-12 skills based on their prominence, relevance and skills used in experience.
-            Identify and highlight the skills in the {resume_text} is very strong in.
-            Return exactly a list, and strictly the elements in that list should be in snake_case not in Space-Separated case.
-            and strictly in the list format ["key_word1","key_word2","key_word3",....."key_word12",].
-            example: Data_science not Data Science
-            
-            
-            Resume: {resume_text}
-            """
-        )
-
-        # Create and return the LLMChain
-        return LLMChain(llm=llm, prompt=resume_prompt)
+        resume_text = upload_and_read_pdf(uploaded_file)
+        st.success("Resume text extracted successfully!")
+        return resume_text
     except Exception as e:
-        raise Exception(f"Error creating analyzer: {str(e)}")
+        st.error(f"Error processing PDF: {str(e)}")
+        return None
+
+def make_clickable(url, text):
+    return f'<a target="_blank" href="{url}">{text}</a>'
+
+# Main App
+def main():
+    init_session_state()
+    
+    with st.sidebar:
+        uploaded_file = render_sidebar()
+        
+        if uploaded_file:
+            experience = experience_selector()
+            tym_ln = date_posted()
+            
+            if experience and tym_ln and st.button("Analyse", type='primary'):
+                # Debugging: Print selected values
+                st.write(f"Selected Experience: {experience}")
+                st.write(f"Selected Time Range: {tym_ln}")
+                
+                # Extract resume text
+                st.session_state.resume_text = extract_resume(uploaded_file)
+                
+                if st.session_state.resume_text:
+                    # Analyze resume to extract keywords
+                    st.session_state.keywords = analyze_resume(st.session_state.resume_text)
+                    if not isinstance(st.session_state.keywords, list):
+                        st.session_state.keywords = []
+                    st.write(f"Extracted Keywords: {st.session_state.keywords}")
+                    
+                    # Generate LinkedIn search URL
+                    st.session_state.url = create_linkedin_search_url(experience, tym_ln, st.session_state.keywords)
+                    st.write(f"Generated URL: {st.session_state.url}")
+                    
+                    # Scrape jobs
+                    try:
+                        st.session_state.jobs_json = scrape_linkedin_jobs(st.session_state.url)
+                        st.session_state.jobs_list = json.loads(st.session_state.jobs_json)
+                    except json.JSONDecodeError as e:
+                        st.error(f"Error parsing jobs data: {e}")
+                        st.session_state.jobs_list = []
+    
+    # Main content area (can be expanded)
+    if st.session_state.resume_text:
+        #st.write("Resume Analysis Results:")
+        if st.session_state.jobs_list and isinstance(st.session_state.jobs_list, list):
+            df = pd.DataFrame(st.session_state.jobs_list)
+            df['link'] = df['link'].apply(lambda x: make_clickable(x, "View Job"))
+            html_table = df.to_html(escape=False, index=False)
+            st.write("### Resume Analysis Results")
+            st.markdown(html_table, unsafe_allow_html=True)
+        else:
+            st.warning("No jobs data available or invalid format.")
 
 
-def convert_string_to_list(input_string):
+
+
+st.markdown(
     """
-    Converts a string representation of a list into an actual Python list.
+    <style>
+    table {
+        width: 100%;
+        border-collapse: collapse;
+        margin: 1em 0;
+        font-size: 1em;
+        font-family: sans-serif;
+        box-shadow: 0 0 20px rgba(0, 0, 0, 0.15);
+    }
+    th, td {
+        padding: 12px 15px;
+        text-align: left;
+        border-bottom: 1px solid #ddd;
+    }
+    th {
+        background-color: #009879;
+        color: white;
+        text-transform: uppercase;
+    }
+    tr:hover {
+        box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2); /* Shadow hover effect */
+        transform: translateY(-2px);
+        transition: all 0.3s ease;
+    }
+    a {
+        color: #009879;
+        text-decoration: none;
+    }
+    a:hover {
+        text-decoration: underline;
+    }
+    </style>
+    """,
+    unsafe_allow_html = True
+)
 
-    Args:
-        input_string (str): A string representation of a list (e.g., '["item1", "item2"]').
-
-    Returns:
-        list: The actual Python list.
-    """
-    try:
-        # Use ast.literal_eval to safely evaluate the string into a list
-        return ast.literal_eval(input_string)
-    except (ValueError, SyntaxError) as e:
-        # Handle invalid input (e.g., malformed string)
-        print(f"Error converting string to list: {e}")
-        return []
-
-
-def analyze_resume(resume_text: str) -> List[str]:
-    """
-    Analyzes the resume text and returns a list of extracted keywords.
-    """
-    if not resume_text:
-        raise ValueError("Resume text is empty")
-
-    try:
-        # Create the resume analyzer chain
-        chain = create_resume_analyzer()
-
-        # Run the chain with the resume text
-        response = chain.run(resume_text=resume_text)
-        print("-############",type(response))
-        # Parse the response to extract keywords
-        keywords = convert_string_to_list(response)
-        #keywords= chain.run(resume_text=resume_text)
-        print('=====',type(keywords))
-        return keywords
-    except Exception as e:
-        raise Exception(f"Error during analysis: {str(e)}")
-
-
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 8501))
+    #port = int(os.environ.get("PORT", 8501))
+    #st.set_page_config(page_title="Resume Analyzer")
+    main()
